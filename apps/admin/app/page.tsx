@@ -1,3 +1,4 @@
+export const dynamic = 'force-dynamic';
 'use client';
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged } from 'firebase/auth';
@@ -15,7 +16,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 function toCSV(rows: any[]) {
-  const headers = ['Created','First Name','Last Name','Email','Model','Country','Budget','Language'];
+  const headers = ['Created', 'First Name', 'Last Name', 'Email', 'Model', 'Country', 'Budget', 'Language'];
   const escape = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const body = rows.map(r => [
     r.createdAt?.toDate?.().toISOString?.() || '',
@@ -59,7 +60,7 @@ export default function AdminHome() {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `leads-${new Date().toISOString().slice(0,10)}.csv`;
+    a.href = url; a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   };
 
