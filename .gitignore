@@ -1,0 +1,12 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build output
+.next
+dist
+out
+
+# Env
+.env
+.env.*

@@ -1,0 +1,19 @@
+{
+  "name": "CNEV_import",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "functions",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter web dev",
+    "dev:admin": "pnpm --filter admin dev",
+    "build:web": "pnpm --filter web build",
+    "build:admin": "pnpm --filter admin build",
+    "lint": "echo 'no lint configured'"
+  }
+}
