@@ -7,16 +7,26 @@ admin.initializeApp();
 const db = admin.firestore();
 const cors = corsFactory({
   origin: (origin, cb) => {
-    const allowed = (process.env.CORS_ORIGIN || (functions.config().cors?.origin ?? '')).split(',').map(s => s.trim()).filter(Boolean);
+    const allowed = (process.env.CORS_ORIGIN || (functions.config().cors?.origin ?? ''))
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
     if (!origin || allowed.includes(origin)) return cb(null, true);
     cb(new Error('Not allowed by CORS'));
   },
   credentials: true
 });
 
+// ---- reCAPTCHA 开关 & 配置 ----
+const recaptchaEnabled =
+  (process.env.RECAPTCHA_ENABLED ?? functions.config().recaptcha?.enabled ?? 'true') === 'true';
+
 async function verifyRecaptcha(token: string) {
+  if (!recaptchaEnabled) return; // 关闭时直接跳过校验
   const secret = process.env.RECAPTCHA_SECRET || functions.config().recaptcha?.secret;
-  if (!secret) throw new Error('Missing reCAPTCHA secret');
+  if (!secret) {
+    throw new Error('Missing reCAPTCHA secret');
+  }
   const res = await fetch('https://www.google.com/recaptcha/api/siteverify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -33,6 +43,7 @@ export const submitLead = functions.https.onRequest(async (req, res) => {
   cors(req, res, async () => {
     try {
       if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+
       const {
         firstName, lastName, email, phone, country,
         preferredLanguage, modelId, modelName, budget,
@@ -41,9 +52,12 @@ export const submitLead = functions.https.onRequest(async (req, res) => {
 
       if (!gdprConsent) return res.status(400).json({ error: 'GDPR consent required' });
       if (!email || !firstName || !lastName || !modelId) return res.status(400).json({ error: 'Missing required fields' });
-      if (!recaptchaToken) return res.status(400).json({ error: 'Missing reCAPTCHA token' });
 
-      await verifyRecaptcha(recaptchaToken);
+      // 仅在开启 reCAPTCHA 时强制需要 token
+      if (recaptchaEnabled) {
+        if (!recaptchaToken) return res.status(400).json({ error: 'Missing reCAPTCHA token' });
+        await verifyRecaptcha(recaptchaToken);
+      }
 
       const doc = {
         firstName, lastName, email, phone, country,
@@ -54,6 +68,7 @@ export const submitLead = functions.https.onRequest(async (req, res) => {
       };
       const ref = await db.collection('leads').add(doc);
 
+      // Brevo 邮件提醒
       const apiKey = process.env.BREVO_KEY || functions.config().brevo?.key;
       const to = process.env.MAIL_TO || functions.config().mail?.to;
       await fetch('https://api.brevo.com/v3/smtp/email', {
