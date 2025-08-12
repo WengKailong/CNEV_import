@@ -1,98 +1,323 @@
+// apps/web/app/[locale]/lead/page.tsx
 'use client';
-import { useState } from 'react';
+
 import Script from 'next/script';
-import { useParams } from 'next/navigation';
+import { useCallback, useMemo, useState } from 'react';
 
-const endpoint = process.env.NEXT_PUBLIC_FUNCTION_SUBMIT_LEAD!;
-const siteKey = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY!;
-
-const dict: any = {
-  en: { title: 'Tell us what you need', submit: 'Submit', submitting: 'Submitting...', thanks: 'Thank you! We will get back to you shortly.', fail: 'Submission failed. Please try again.' },
-  de: { title: 'Sagen Sie uns, was Sie brauchen', submit: 'Senden', submitting: 'Senden...', thanks: 'Danke! Wir melden uns in Kürze.', fail: 'Senden fehlgeschlagen. Bitte erneut versuchen.' }
+type LeadPayload = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone?: string;
+  country?: string;
+  preferredLanguage?: string;
+  modelId: string;
+  modelName?: string;
+  budget?: number | null;
+  message?: string;
+  gdprConsent: boolean;
+  utm?: Record<string, string>;
+  recaptchaToken?: string;
 };
 
-export default function LeadPage() {
-  const params = useParams<{ locale: string }>();
-  const locale = (params?.locale as string) || 'en';
-  const t = dict[locale] || dict.en;
-
-  const [loading, setLoading] = useState(false);
-  const [ok, setOk] = useState<boolean | null>(null);
-
-  async function getRecaptchaToken() {
-    const grecaptcha: any = (window as any).grecaptcha;
-    return new Promise<string>((resolve) => {
-      if (!grecaptcha) return resolve('');
-      grecaptcha.ready(() => {
-        grecaptcha.execute(siteKey, { action: 'lead_submit' }).then((token: string) => resolve(token));
-      });
-    });
+declare global {
+  interface Window {
+    grecaptcha?: {
+      ready: (cb: () => void) => void;
+      execute: (siteKey: string, opts: { action: string }) => Promise<string>;
+    };
   }
+}
 
-  async function submit(formData: FormData) {
-    setLoading(true); setOk(null);
-    const payload: any = Object.fromEntries(formData.entries());
-    const recaptchaToken = await getRecaptchaToken();
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...payload,
-        budget: payload.budget ? Number(payload.budget) : null,
-        gdprConsent: payload.gdprConsent === 'on',
-        recaptchaToken,
-        preferredLanguage: locale,
-        utm: {
-          source: new URLSearchParams(window.location.search).get('utm_source'),
-          medium: new URLSearchParams(window.location.search).get('utm_medium'),
-          campaign: new URLSearchParams(window.location.search).get('utm_campaign')
+export default function LeadPage({ params }: { params: { locale: string } }) {
+  const endpoint = process.env.NEXT_PUBLIC_FUNCTION_SUBMIT_LEAD || '';
+  const recaptchaEnabled = (process.env.NEXT_PUBLIC_RECAPTCHA_ENABLED ?? 'false') === 'true';
+  const recaptchaSiteKey = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY || '';
+
+  const [sending, setSending] = useState(false);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  const defaultLang = useMemo(() => (['en', 'de'].includes(params?.locale) ? params.locale : 'en'), [params?.locale]);
+
+  const [form, setForm] = useState<LeadPayload>({
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    country: 'DE',
+    preferredLanguage: defaultLang,
+    modelId: '',
+    modelName: '',
+    budget: undefined,
+    message: '',
+    gdprConsent: false,
+  });
+
+  const models = useMemo(
+    () => [
+      { id: 'BYD-SEAL', name: 'BYD Seal' },
+      { id: 'BYD-ATTO3', name: 'BYD ATTO 3' },
+      { id: 'TESLA-M3', name: 'Tesla Model 3 (CN PI)' },
+    ],
+    []
+  );
+
+  const countries = useMemo(
+    () => ['DE', 'AT', 'NL', 'BE', 'FR', 'IT', 'ES', 'PL', 'CZ', 'DK', 'SE', 'NO'],
+    []
+  );
+
+  const onChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+      const { name, value, type, checked } = e.target as HTMLInputElement;
+      setForm((f) => ({
+        ...f,
+        [name]:
+          type === 'checkbox'
+            ? checked
+            : name === 'budget' && value !== ''
+              ? Number(value)
+              : value,
+      }));
+    },
+    []
+  );
+
+  const validate = (f: LeadPayload) => {
+    if (!f.firstName.trim()) return 'First name is required';
+    if (!f.lastName.trim()) return 'Last name is required';
+    if (!f.email.trim() || !/\S+@\S+\.\S+/.test(f.email)) return 'Valid email is required';
+    if (!f.modelId) return 'Please select a model';
+    if (!f.gdprConsent) return 'GDPR consent is required';
+    if (!endpoint) return 'Submit endpoint is not configured';
+    return null;
+    // NOTE: backend will also validate
+  };
+
+  const getRecaptchaToken = async (): Promise<string | undefined> => {
+    if (!recaptchaEnabled || !recaptchaSiteKey) return undefined;
+    // wait until grecaptcha is ready (script injected below)
+    await new Promise<void>((resolve) => {
+      const wait = () => {
+        if (typeof window !== 'undefined' && window.grecaptcha?.ready) {
+          window.grecaptcha.ready(() => resolve());
+        } else {
+          setTimeout(wait, 50);
         }
-      })
+      };
+      wait();
     });
-    setOk(res.ok);
-    setLoading(false);
-  }
+    return window.grecaptcha!.execute(recaptchaSiteKey, { action: 'lead_submit' });
+  };
+
+  const onSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      setOkMsg(null);
+      setErrMsg(null);
+
+      const v = validate(form);
+      if (v) {
+        setErrMsg(v);
+        return;
+      }
+
+      setSending(true);
+      try {
+        const token = await getRecaptchaToken();
+        const payload: LeadPayload = {
+          ...form,
+          preferredLanguage: form.preferredLanguage || defaultLang,
+          modelName: form.modelName || (models.find((m) => m.id === form.modelId)?.name ?? ''),
+          recaptchaToken: token,
+          // naive UTM capture from URL
+          utm: Object.fromEntries(new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '')),
+        };
+
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json().catch(() => ({} as any));
+        if (!res.ok) throw new Error(data?.error || `Submit failed (${res.status})`);
+
+        setOkMsg('Submitted successfully! ID: ' + (data?.id ?? ''));
+        // reset minimal fields
+        setForm((f) => ({ ...f, message: '', budget: undefined }));
+      } catch (err: any) {
+        setErrMsg(err?.message || 'Submit failed');
+        console.error(err);
+      } finally {
+        setSending(false);
+      }
+    },
+    [form, endpoint, defaultLang, models, recaptchaEnabled, recaptchaSiteKey]
+  );
 
   return (
-    <main className="mx-auto max-w-2xl p-6">
-      <Script src={`https://www.google.com/recaptcha/api.js?render=${siteKey}`} strategy="afterInteractive" />
-      <h1 className="mb-4 text-2xl font-bold">{t.title}</h1>
-      <form action={submit} className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <input name="firstName" placeholder="First name" className="rounded-xl border p-3" required />
-          <input name="lastName" placeholder="Last name" className="rounded-xl border p-3" required />
-        </div>
-        <input name="email" type="email" placeholder="Email" className="w-full rounded-xl border p-3" required />
-        <input name="phone" placeholder="Phone" className="w-full rounded-xl border p-3" />
-        <div className="grid grid-cols-2 gap-3">
-          <input name="country" placeholder="Country" className="rounded-xl border p-3" />
-          <select name="preferredLanguage" className="rounded-xl border p-3" defaultValue={locale}>
-            <option value="en">English</option>
-            <option value="de">Deutsch</option>
-          </select>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <input name="modelId" placeholder="Model ID" className="rounded-xl border p-3" required />
-          <input name="modelName" placeholder="Model name (optional)" className="rounded-xl border p-3" />
-        </div>
-        <input name="budget" type="number" placeholder="Budget (EUR)" className="w-full rounded-xl border p-3" />
-        <textarea name="message" placeholder="Message" className="w-full rounded-xl border p-3" rows={4} />
+    <div className="mx-auto max-w-2xl p-6">
+      {/* Only inject reCAPTCHA script if explicitly enabled AND site key present */}
+      {recaptchaEnabled && recaptchaSiteKey && (
+        <Script
+          id="recaptcha-v3"
+          src={`https://www.google.com/recaptcha/api.js?render=${recaptchaSiteKey}`}
+          strategy="afterInteractive"
+        />
+      )}
 
-        <label className="flex items-start gap-2 text-sm">
-          <input name="gdprConsent" type="checkbox" required />
-          <span>
-            I agree to the processing of my personal data for the purpose of receiving a quotation in accordance with the
-            <a className="underline" href="/privacy" target="_blank"> Privacy Policy</a>.
-          </span>
+      <h1 className="text-2xl font-semibold mb-4">Request a Quote</h1>
+
+      <form onSubmit={onSubmit} className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <label className="flex flex-col">
+            <span>First name *</span>
+            <input
+              name="firstName"
+              value={form.firstName}
+              onChange={onChange}
+              className="border rounded p-2"
+              required
+            />
+          </label>
+          <label className="flex flex-col">
+            <span>Last name *</span>
+            <input
+              name="lastName"
+              value={form.lastName}
+              onChange={onChange}
+              className="border rounded p-2"
+              required
+            />
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <label className="flex flex-col">
+            <span>Email *</span>
+            <input
+              type="email"
+              name="email"
+              value={form.email}
+              onChange={onChange}
+              className="border rounded p-2"
+              required
+            />
+          </label>
+          <label className="flex flex-col">
+            <span>Phone</span>
+            <input
+              name="phone"
+              value={form.phone}
+              onChange={onChange}
+              className="border rounded p-2"
+            />
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <label className="flex flex-col">
+            <span>Country</span>
+            <select name="country" value={form.country} onChange={onChange} className="border rounded p-2">
+              {countries.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col">
+            <span>Preferred language</span>
+            <select
+              name="preferredLanguage"
+              value={form.preferredLanguage}
+              onChange={onChange}
+              className="border rounded p-2"
+            >
+              <option value="en">English</option>
+              <option value="de">Deutsch</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <label className="flex flex-col">
+            <span>Model *</span>
+            <select
+              name="modelId"
+              value={form.modelId}
+              onChange={onChange}
+              className="border rounded p-2"
+              required
+            >
+              <option value="">Select a model</option>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col">
+            <span>Budget (€)</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              name="budget"
+              value={form.budget ?? ''}
+              onChange={onChange}
+              className="border rounded p-2"
+              placeholder="e.g. 38000"
+              min={0}
+            />
+          </label>
+        </div>
+
+        <label className="flex flex-col">
+          <span>Message</span>
+          <textarea
+            name="message"
+            value={form.message}
+            onChange={onChange}
+            className="border rounded p-2"
+            rows={4}
+            placeholder="Any requirements, timeline, preferred trim, etc."
+          />
         </label>
 
-        <button disabled={loading} className="rounded-xl bg-black px-4 py-2 text-white disabled:opacity-50">
-          {loading ? t.submitting : t.submit}
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            name="gdprConsent"
+            checked={form.gdprConsent}
+            onChange={onChange}
+            className="h-4 w-4"
+            required
+          />
+          <span>I consent to the processing of my personal data (GDPR).</span>
+        </label>
+
+        <button
+          type="submit"
+          disabled={sending}
+          className="bg-black text-white rounded px-4 py-2 disabled:opacity-60"
+        >
+          {sending ? 'Submitting…' : 'Submit'}
         </button>
 
-        {ok === true && <p className="text-green-600">{t.thanks}</p>}
-        {ok === false && <p className="text-red-600">{t.fail}</p>}
+        {okMsg && <p className="text-green-700">{okMsg}</p>}
+        {errMsg && <p className="text-red-600">{errMsg}</p>}
+
+        {/* Dev helpers */}
+        <div className="text-xs text-gray-500 mt-4 space-y-1">
+          <div>Endpoint: {endpoint || '(not set)'}</div>
+          <div>reCAPTCHA: {recaptchaEnabled ? `enabled (${recaptchaSiteKey ? 'key present' : 'missing key'})` : 'disabled'}</div>
+        </div>
       </form>
-    </main>
+    </div>
   );
 }
