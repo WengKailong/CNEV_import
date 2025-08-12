@@ -1,5 +1,5 @@
-export const dynamic = 'force-dynamic';
 'use client';
+export const dynamic = 'force-dynamic';
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, query, orderBy, getDocs } from 'firebase/firestore';

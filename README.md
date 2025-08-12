@@ -27,6 +27,21 @@ pnpm dev:admin
 
 Deploy Functions:
 
+### Toggle reCAPTCHA (optional)
+
+Disable for now:
+```bash
+firebase functions:config:set recaptcha.enabled="false"
+firebase deploy --only functions
+```
+
+Enable later with secret:
+```bash
+firebase functions:config:set recaptcha.enabled="true" recaptcha.secret="<RECAPTCHA_V3_SECRET>" recaptcha.threshold="0.5"
+firebase deploy --only functions
+```
+
+
 ```bash
 cd functions
 pnpm build
